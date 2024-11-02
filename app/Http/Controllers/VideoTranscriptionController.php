@@ -2,10 +2,11 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Support\Facades\Log; // Import Log facade
+use App\Models\Transcription; // Ensure you have the Transcription model
 use Illuminate\Http\Request;
-use App\Models\Transcription;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class VideoTranscriptionController extends Controller
 {
@@ -16,113 +17,153 @@ class VideoTranscriptionController extends Controller
 
     public function transcribe(Request $request)
     {
-        // Validate the request
         $request->validate([
             'video_url' => 'required|url',
         ]);
 
-        // Extract video ID from the YouTube URL
-        $videoId = $this->extractVideoId($request->video_url);
-        if (!$videoId) {
-            return response()->json(['error' => 'Invalid YouTube URL'], 400);
+        $videoUrl = $request->input('video_url');
+
+        // Create a filename based on the video URL
+        $filename = Str::slug(parse_url($videoUrl, PHP_URL_PATH)) . '_' . time() . '.mp3';
+        $outputFile = storage_path("app/public/audio/$filename");
+
+        // Execute yt-dlp to download the audio
+        $command = "yt-dlp -x --audio-format mp3 -o \"$outputFile\" \"$videoUrl\"";
+        exec($command, $output, $returnVar);
+
+        // Check if the audio download was successful
+        if ($returnVar !== 0) {
+            return redirect()->back()->withErrors(['error' => 'Failed to download audio: ' . implode("\n", $output)]);
         }
 
-        // Fetch video details using YouTube Data API
-        $apiKey = env('YOUTUBE_API_KEY'); // Your YouTube Data API key
-        $videoDetailsUrl = "https://www.googleapis.com/youtube/v3/videos?id={$videoId}&key={$apiKey}&part=snippet,contentDetails";
+        try {
+            // Send the audio file to AssemblyAI and start transcription
+            $assemblyResponse = $this->sendToAssemblyAI($outputFile);
+            $uploadUrl = $assemblyResponse['upload_url']; // Get the upload URL
+            $transcriptionResponse = $this->startTranscription($uploadUrl); // Start transcription
 
-        $videoDetailsResponse = Http::withOptions([
-            'verify' => false, // Disable SSL verification
-        ])->get($videoDetailsUrl);
-
-        if ($videoDetailsResponse->failed()) {
-            Log::error('Failed to fetch video details:', [
-                'status' => $videoDetailsResponse->status(),
-                'body' => $videoDetailsResponse->body(),
-            ]);
-            return response()->json(['error' => 'Failed to fetch video details'], 500);
+            // Store transcription details in the database
+            $this->storeTranscription($request->video_url, $transcriptionResponse['id']);
+        } catch (\Exception $e) {
+            return redirect()->back()->withErrors(['error' => $e->getMessage()]);
         }
 
-        $videoDetails = $videoDetailsResponse->json();
-        if (empty($videoDetails['items'])) {
-            return response()->json(['error' => 'Video not found'], 404);
-        }
+        // Clean up the audio file after processing
+        // @unlink($outputFile);
 
-        // Example transcription API that accepts YouTube URLs
-        $transcriptionApiUrl = 'https://api.example.com/transcribe'; // Replace with actual API URL
-        $transcriptionResponse = Http::withOptions([
-            'verify' => false, // Disable SSL verification
-        ])->post($transcriptionApiUrl, [
-            'youtube_url' => $request->video_url, // Use the YouTube video URL directly
-        ]);
-
-        if ($transcriptionResponse->failed()) {
-            Log::error('Transcription request failed:', [
-                'status' => $transcriptionResponse->status(),
-                'body' => $transcriptionResponse->body(),
-            ]);
-            return response()->json(['error' => 'Failed to request transcription', 'details' => $transcriptionResponse->body()], 500);
-        }
-
-        $transcriptionId = $transcriptionResponse['id']; // Adjust based on actual response structure
-
-        // Save the transcription request to the database
-        $transcription = Transcription::create([
-            'video_url' => $request->video_url,
-            'transcription_id' => $transcriptionId,
-            'status' => 'processing', // Transcription is being processed
-        ]);
-
-        return response()->json(['message' => 'Transcription request sent!', 'data' => $transcription]);
+        return redirect()->back()->with('message', 'Video transcription started successfully.');
     }
 
-    public function checkTranscriptionStatus()
+    protected function sendToAssemblyAI($filePath)
     {
-        // Fetch all transcriptions
-        $transcriptions = Transcription::all();
+        // Check if the file exists before trying to upload
+        if (!file_exists($filePath)) {
+            throw new \Exception("File does not exist: $filePath");
+        }
 
-        // Call the API to get the status for each transcription
-        foreach ($transcriptions as $transcription) {
-            // Call the transcription API to get the status
-            $response = Http::withOptions([
-                'verify' => false, // Disable SSL verification
-            ])->get("https://api.example.com/transcribe/status/{$transcription->transcription_id}"); // Adjust based on actual API
+        // Open the audio file for reading
+        $fileResource = fopen($filePath, 'r');
 
-            // Handle the response from the API
-            if ($response->successful()) {
-                $status = $response->json('status'); // Adjust based on actual response structure
+        // Prepare and make the API request to AssemblyAI
+        $response = Http::withOptions(['verify' => false]) // Disable SSL verification
+            ->withHeaders([
+                'Authorization' => env('ASSEMBLYAI_API_KEY'),
+                'Content-Type' => 'application/json',
+            ])
+            ->attach('file', $fileResource, basename($filePath))
+            ->post('https://api.assemblyai.com/v2/upload');
 
-                // Update transcription status in the database
-                switch ($status) {
-                    case 'completed':
-                        $transcription->status = 'completed';
-                        $transcription->text = $response->json('transcription_text'); // Save the transcription text
-                        break;
+        // Check if the response is successful
+        if (!$response->successful()) {
+            Log::error('Failed to send audio to AssemblyAI: ', [
+                'response' => $response->body(),
+                'status' => $response->status(),
+            ]);
+            throw new \Exception('Failed to send audio to AssemblyAI: ' . $response->body());
+        }
 
-                    case 'failed':
-                        $transcription->status = 'failed';
-                        break;
+        // Decode the JSON response from AssemblyAI
+        $responseData = $response->json();
 
-                        // Status could be 'processing', so no action needed
-                }
+        // Log the response data to verify its structure
+        Log::info('Response from AssemblyAI: ', $responseData);
 
-                // Save the transcription status
-                $transcription->save();
-            } else {
-                // Log or handle API error response
-                $transcription->status = 'error'; // Mark as error if API call fails
-                $transcription->save();
+        // Ensure the response is of a valid type
+        if (!is_array($responseData) && !is_object($responseData)) {
+            throw new \Exception('Unexpected response type: ' . gettype($responseData));
+        }
+
+        return $responseData; // This will contain the upload URL and other metadata
+    }
+
+    protected function startTranscription($uploadUrl)
+    {
+        // Make a request to start transcription with the uploaded audio URL
+        $response = Http::withOptions(['verify' => false])
+            ->withHeaders([
+                'Authorization' => env('ASSEMBLYAI_API_KEY'),
+                'Content-Type' => 'application/json',
+            ])
+            ->post('https://api.assemblyai.com/v2/transcript', [
+                'audio_url' => $uploadUrl, // Pass the upload URL to the request
+                'language_model' => 'assemblyai_default', // Specify the language model if necessary
+            ]);
+
+        // Check if the transcription request was successful
+        if (!$response->successful()) {
+            Log::error('Failed to start transcription: ', [
+                'response' => $response->body(),
+                'status' => $response->status(),
+            ]);
+            throw new \Exception('Failed to start transcription: ' . $response->body());
+        }
+
+        return $response->json(); // This will return the transcription ID and other details
+    }
+
+    protected function storeTranscription($videoUrl, $transcriptionId)
+    {
+        // Create a new transcription record
+        $transcription = new Transcription();
+        $transcription->video_url = $videoUrl;
+        $transcription->transcription_id = $transcriptionId;
+        $transcription->status = 'processing'; // Set initial status
+        $transcription->text = json_encode(['transcription' => '']); // Initialize with empty JSON
+        $transcription->save();
+    }
+
+    protected function updateTranscription($transcriptionId)
+    {
+        $transcription = Transcription::where('transcription_id', $transcriptionId)->first();
+
+        if ($transcription) {
+            $statusResponse = $this->checkTranscriptionStatus($transcriptionId);
+            $transcription->status = $statusResponse['status'];
+
+            // Check if transcription is completed
+            if ($statusResponse['status'] === 'completed') {
+                // Save transcription text as JSON
+                $transcription->text = json_encode(['transcription' => $statusResponse['text']]); // Store text as JSON
+                $transcription->status = 'completed'; // Update status
             }
-        }
 
-        // Pass the updated transcriptions to the view
-        return view('status', compact('transcriptions'));
+            $transcription->save();
+        }
     }
 
-    private function extractVideoId($url)
+    protected function checkTranscriptionStatus($transcriptionId)
     {
-        // Use regex to extract the video ID from the YouTube URL
-        preg_match('/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^&\n]{11})/', $url, $matches);
-        return isset($matches[1]) ? $matches[1] : null;
+        $response = Http::withOptions(['verify' => false])
+            ->withHeaders([
+                'Authorization' => env('ASSEMBLYAI_API_KEY'),
+                'Content-Type' => 'application/json',
+            ])
+            ->get("https://api.assemblyai.com/v2/transcript/{$transcriptionId}");
+
+        if (!$response->successful()) {
+            throw new \Exception('Failed to check transcription status: ' . $response->body());
+        }
+
+        return $response->json();
     }
 }

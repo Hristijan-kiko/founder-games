@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->string('video_url');
             $table->string('transcription_id');
-            $table->text('text')->nullable(); // Text of the transcription
+            $table->json('text')->nullable(); // Text of the transcription
             $table->string('status'); // processing, completed, failed
             $table->timestamps();
         });
