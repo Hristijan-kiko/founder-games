@@ -1,4 +1,3 @@
-<!-- resources/views/transcribe.blade.php -->
 <!DOCTYPE html>
 <html lang="en">
 
@@ -6,20 +5,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Video Transcription</title>
-
+    <!-- Include Bootstrap CSS -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
 </head>
 
 <body>
-    <div class="container">
-        <h1>Video Transcription</h1>
+    <div class="container mt-5">
+        <h1 class="text-center text-primary">Video Transcription</h1>
 
-        <form action="{{ url('/transcribe') }}" method="POST">
+        <form action="{{ url('/transcribe') }}" method="POST" id="transcriptionForm" class="mt-4">
             @csrf
             <div class="form-group">
                 <label for="video_url">Video URL:</label>
                 <input type="url" name="video_url" id="video_url" class="form-control" required>
             </div>
-            <button type="submit" class="btn btn-primary">Transcribe Video</button>
+            <button type="submit" class="btn btn-primary btn-block">Transcribe Video</button>
         </form>
 
         @if (session('message'))
@@ -37,13 +37,38 @@
                 </ul>
             </div>
         @endif
-    </div>
 
+        <h2 class="mt-5">All Transcriptions</h2>
+        @if ($transcriptions->isEmpty())
+            <p>No transcriptions available.</p>
+        @else
+            <table class="table table-bordered mt-3">
+                <thead class="thead-dark">
+                    <tr>
+                        <th>Video URL</th>
+                        <th>Transcription ID</th>
+                        <th>Status</th>
+                        <th>Transcription Text</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach ($transcriptions as $transcription)
+                        <tr>
+                            <td>{{ $transcription->video_url }}</td>
+                            <td>{{ $transcription->transcription_id }}</td>
+                            <td>{{ $transcription->status }}</td>
+                            <td>{{ json_decode($transcription->text)->transcription ?? 'N/A' }}</td>
+                            <td>{{ $transcription->created_at->format('Y-m-d H:i:s') }}</td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        @endif
+    </div>
 
     <script>
         document.getElementById('transcriptionForm').addEventListener('submit', function(event) {
-            event.preventDefault(); // Prevent the default form submission
-
             const formData = new FormData(this);
             const messageDiv = document.getElementById('message');
             messageDiv.innerHTML = ''; // Clear previous messages
@@ -69,6 +94,7 @@
                     } else {
                         messageDiv.innerHTML = `<p>${data.message}</p>`;
                         messageDiv.classList.add('alert', 'alert-success');
+                        // Optionally, you could refresh the page or update the transcriptions section
                     }
                 })
                 .catch(error => {

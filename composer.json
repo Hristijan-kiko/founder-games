@@ -9,7 +9,8 @@
         "google/cloud-speech": "^1.19",
         "guzzlehttp/guzzle": "^7.9",
         "laravel/framework": "^11.9",
-        "laravel/tinker": "^2.9"
+        "laravel/tinker": "^2.9",
+        "norkunas/youtube-dl-php": "dev-master"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

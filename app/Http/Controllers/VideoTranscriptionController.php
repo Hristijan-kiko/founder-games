@@ -12,7 +12,8 @@ class VideoTranscriptionController extends Controller
 {
     public function showTranscribeForm()
     {
-        return view('transcribe');
+        $transcriptions = Transcription::all(); // Fetch all transcriptions
+        return view('transcribe', compact('transcriptions')); // Pass them to the view
     }
 
     public function transcribe(Request $request)
@@ -132,7 +133,7 @@ class VideoTranscriptionController extends Controller
         $transcription->save();
     }
 
-    protected function updateTranscription($transcriptionId)
+    public function updateTranscription($transcriptionId)
     {
         $transcription = Transcription::where('transcription_id', $transcriptionId)->first();
 
