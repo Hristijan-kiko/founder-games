@@ -4,32 +4,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Transcription</title>
-    <!-- Include Bootstrap CSS -->
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <title>Transcribe Video</title>
 </head>
 
 <body>
-    <div class="container mt-5">
-        <h1 class="text-center text-primary">Video Transcription</h1>
-
-        <form action="{{ url('/transcribe') }}" method="POST" id="transcriptionForm" class="mt-4">
-            @csrf
-            <div class="form-group">
-                <label for="video_url">Video URL:</label>
-                <input type="url" name="video_url" id="video_url" class="form-control" required>
-            </div>
-            <button type="submit" class="btn btn-primary btn-block">Transcribe Video</button>
-        </form>
+    <div class="container mx-auto p-4">
+        <h1 class="text-2xl font-bold mb-4">Transcribe Video</h1>
 
         @if (session('message'))
-            <div class="alert alert-success mt-3">
+            <div class="bg-green-200 text-green-800 p-2 mb-4 rounded">
                 {{ session('message') }}
             </div>
         @endif
 
         @if ($errors->any())
-            <div class="alert alert-danger mt-3">
+            <div class="bg-red-200 text-red-800 p-2 mb-4 rounded">
                 <ul>
                     @foreach ($errors->all() as $error)
                         <li>{{ $error }}</li>
@@ -38,71 +27,48 @@
             </div>
         @endif
 
-        <h2 class="mt-5">All Transcriptions</h2>
-        @if ($transcriptions->isEmpty())
-            <p>No transcriptions available.</p>
-        @else
-            <table class="table table-bordered mt-3">
-                <thead class="thead-dark">
-                    <tr>
-                        <th>Video URL</th>
-                        <th>Transcription ID</th>
-                        <th>Status</th>
-                        <th>Transcription Text</th>
-                        <th>Created At</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach ($transcriptions as $transcription)
-                        <tr>
-                            <td>{{ $transcription->video_url }}</td>
-                            <td>{{ $transcription->transcription_id }}</td>
-                            <td>{{ $transcription->status }}</td>
-                            <td>{{ json_decode($transcription->text)->transcription ?? 'N/A' }}</td>
-                            <td>{{ $transcription->created_at->format('Y-m-d H:i:s') }}</td>
-                        </tr>
-                    @endforeach
-                </tbody>
-            </table>
+        <!-- Video URL Transcription Form -->
+        <form action="{{ route('transcribe') }}" method="POST">
+            @csrf
+            <div class="mb-4">
+                <label for="video_url" class="block text-sm font-medium">Video URL:</label>
+                <input type="url" name="video_url" id="video_url" required
+                    class="mt-1 p-2 border border-gray-300 rounded w-full" placeholder="Enter the video URL">
+            </div>
+            <button type="submit" class="bg-blue-500 text-white p-2 rounded">Start Transcription</button>
+        </form>
+
+        <hr class="my-4">
+
+        <!-- Word Search Form -->
+        <form action="{{ route('search.timestamps') }}" method="POST">
+            @csrf
+            <div class="mb-4">
+                <label for="search_word" class="block text-sm font-medium">Search Word:</label>
+                <input type="text" name="search_word" id="search_word" required
+                    class="mt-1 p-2 border border-gray-300 rounded w-full" placeholder="Enter the word to search for">
+            </div>
+            <button type="submit" class="bg-green-500 text-white p-2 rounded">Search Word in Transcription</button>
+        </form>
+        <br>
+        <br>
+        <br>
+
+        <!-- Results Section -->
+        @if (isset($results) && count($results) > 0)
+            <h2 class="text-xl font-semibold">Search Results:</h2>
+            <ul class="list-disc pl-5">
+                @foreach ($results as $result)
+                    <li>
+                        Word: "{{ $result['text'] }}" - Time: {{ $result['start_time'] }} - Confidence:
+                        {{ $result['confidence'] }}
+                    </li>
+                @endforeach
+            </ul>
+        @elseif (isset($results))
+            <p>No results found for the word.</p>
         @endif
     </div>
-
-    <script>
-        document.getElementById('transcriptionForm').addEventListener('submit', function(event) {
-            const formData = new FormData(this);
-            const messageDiv = document.getElementById('message');
-            messageDiv.innerHTML = ''; // Clear previous messages
-            messageDiv.className = ''; // Clear any previous classes
-
-            // Display loading message
-            messageDiv.innerHTML = '<p>Submitting your request...</p>';
-            messageDiv.classList.add('alert', 'alert-info');
-
-            // Use fetch API to submit the form data
-            fetch(this.action, {
-                    method: 'POST',
-                    body: formData,
-                    headers: {
-                        'X-Requested-With': 'XMLHttpRequest', // Indicate that it's an AJAX request
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        messageDiv.innerHTML = `<p>${data.error}</p>`;
-                        messageDiv.classList.add('alert', 'alert-danger');
-                    } else {
-                        messageDiv.innerHTML = `<p>${data.message}</p>`;
-                        messageDiv.classList.add('alert', 'alert-success');
-                        // Optionally, you could refresh the page or update the transcriptions section
-                    }
-                })
-                .catch(error => {
-                    messageDiv.innerHTML = `<p>Something went wrong. Please try again later.</p>`;
-                    messageDiv.classList.add('alert', 'alert-danger');
-                });
-        });
-    </script>
 </body>
 
 </html>
