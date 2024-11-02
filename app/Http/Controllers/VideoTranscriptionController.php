@@ -13,27 +13,26 @@ class VideoTranscriptionController extends Controller
 {
     public function showTranscribeForm()
     {
-        $transcriptions = Transcription::all(); // Fetch all transcriptions
-        return view('transcribe', compact('transcriptions')); // Pass them to the view
+        $transcriptions = Transcription::all();
+        $results = session('results', []);
+        $response = session('response', '');
+        return view('transcribe', compact('transcriptions', 'results', 'response'));
     }
 
     public function transcribe(Request $request)
     {
         $request->validate([
-            'video_url' => 'required|url',
+            'video_url' => 'url',
         ]);
 
         $videoUrl = $request->input('video_url');
 
-        // Create a filename based on the video URL
         $filename = Str::slug(parse_url($videoUrl, PHP_URL_PATH)) . '_' . time() . '.mp3';
         $outputFile = storage_path("app/public/audio/$filename");
 
-        // Execute yt-dlp to download the audio
         $command = "yt-dlp -x --audio-format mp3 -o \"$outputFile\" \"$videoUrl\"";
         exec($command, $output, $returnVar);
 
-        // Check if the audio download was successful
         if ($returnVar !== 0) {
             return redirect()->back()->withErrors(['error' => 'Failed to download audio: ' . implode("\n", $output)]);
         }
@@ -147,7 +146,6 @@ class VideoTranscriptionController extends Controller
 
             // Check if transcription is completed
             if ($statusResponse['status'] === 'completed') {
-
                 // Ensure the words key exists and is an array
                 if (isset($statusResponse['words']) && is_array($statusResponse['words'])) {
                     // Save transcription text and timestamps as JSON
@@ -165,7 +163,7 @@ class VideoTranscriptionController extends Controller
     public function searchTimestamps(Request $request)
     {
         $request->validate([
-            'search_word' => 'required|string|max:255',
+            'search_word' => 'string|max:255',
         ]);
 
         $searchWord = strtolower($request->input('search_word')); // Make the search case-insensitive
@@ -194,6 +192,87 @@ class VideoTranscriptionController extends Controller
             }
         }
 
-        return view('transcribe', compact('results'));
+        return redirect()->route('transcribe')->with('results', $results);
+    }
+
+    // NEW FUNCTIONALITY: Handle prompt parsing for ChatGPT
+    public function parsePrompt(Request $request)
+    {
+        $request->validate([
+            'prompt' => 'string|max:500',
+            'transcription_ids' => 'array',
+            'transcription_ids.*' => 'exists:transcriptions,transcription_id', // Ensure they exist
+        ]);
+
+        $prompt = $request->input('prompt');
+        $transcriptionIds = request()->input('transcriptions', []); // This will get the input or default to an empty array
+
+        if (in_array('all', $transcriptionIds)) {
+            // Get all completed transcriptions
+            $transcriptions = Transcription::where('status', 'completed')->get();
+        } else {
+            // Ensure we only attempt to query with an array
+            $transcriptions = Transcription::whereIn('transcription_id', $transcriptionIds)->get();
+        }
+        if ($transcriptions->isEmpty()) {
+            return redirect()->back()->withErrors(['error' => 'No selected transcriptions found.']);
+        }
+
+        // Combine the prompt and transcription texts for ChatGPT
+        $combinedText = $transcriptions->map(function ($transcription) {
+            return $this->getTranscriptionText($transcription);
+        })->implode(' ');
+
+        $combinedPrompt = "Transcription text: $combinedText\n User prompt: {$prompt}";
+
+        // Send the combined prompt to ChatGPT (using the OpenAI API)
+        try {
+            $response = $this->getGPTResponse($combinedPrompt);
+        } catch (\Exception $e) {
+            return redirect()->back()->withErrors(['error' => 'Failed to get response from ChatGPT: ' . $e->getMessage()]);
+        }
+
+        // Return the response to the view
+        return redirect()->route('transcribe')->with('response', $response);
+    }
+
+
+    protected function getTranscriptionText($transcription)
+    {
+        // Decode the JSON text field that contains the transcription
+        $transcriptionData = json_decode($transcription->text, true);
+        return isset($transcriptionData['transcription']) ? implode(' ', array_map(fn($wordData) => $wordData['text'], $transcriptionData['transcription'])) : '';
+    }
+
+    protected function getGPTResponse($prompt)
+    {
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . env('OPENAI_API_KEY'),
+            'Content-Type' => 'application/json',
+        ])->withOptions([
+            'verify' => false, // Disable SSL verification
+        ])->post('https://api.openai.com/v1/chat/completions', [
+            'model' => 'gpt-4-turbo',
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => "You are a specialized chatbot character designed to interact based solely on a specific transcription provided to you. Your responses should only reference and utilize the content of this transcription. You are not permitted to incorporate external knowledge, personal opinions, or additional context beyond what is contained in the transcription. Please wait for the user to present the transcription before engaging in any conversation. If asked return in minutes"
+                ],
+                [
+                    'role' => 'user',
+                    'content' => $prompt
+                ],
+            ],
+        ]);
+
+        if (!$response->successful()) {
+            Log::error('ChatGPT API error: ', [
+                'response' => $response->body(),
+                'status' => $response->status(),
+            ]);
+            throw new \Exception('ChatGPT API request failed: ' . $response->body());
+        }
+
+        return $response->json()['choices'][0]['message']['content'];
     }
 }
