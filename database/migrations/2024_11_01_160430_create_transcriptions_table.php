@@ -13,9 +13,12 @@ return new class extends Migration
     {
         Schema::create('transcriptions', function (Blueprint $table) {
             $table->id();
+            $table->string('title')->nullable();
             $table->string('video_url');
             $table->string('transcription_id');
             $table->json('text')->nullable(); // Text of the transcription
+            $table->json('summary')->nullable();
+            $table->json('keypoints')->nullable();
             $table->string('status'); // processing, completed, failed
             $table->timestamps();
         });

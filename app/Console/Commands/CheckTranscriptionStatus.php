@@ -27,7 +27,11 @@ class CheckTranscriptionStatus extends Command
     public function handle()
     {
         // Get all transcriptions that are processing
-        $transcriptions = Transcription::where('status', 'processing')->get();
+        $transcriptions = Transcription::whereIn('status', ['processing', 'queued'])->get();
+
+        if ($transcriptions->isEmpty()) {
+            $this->info('No transcriptions found in processing state.');
+        }
 
         foreach ($transcriptions as $transcription) {
             // Call the update method from your controller

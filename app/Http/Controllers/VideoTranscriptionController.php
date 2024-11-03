@@ -137,15 +137,17 @@ class VideoTranscriptionController extends Controller
 
     public function updateTranscription($transcriptionId)
     {
+        // Find the transcription by its ID
         $transcription = Transcription::where('transcription_id', $transcriptionId)->first();
 
         if ($transcription) {
+            // Check the transcription status from an external service
             $statusResponse = $this->checkTranscriptionStatus($transcriptionId);
             $transcription->status = $statusResponse['status'];
 
             // Check if transcription is completed
             if ($statusResponse['status'] === 'completed') {
-                // Ensure the words key exists and is an array
+                // Ensure the 'words' key exists and is an array
                 if (isset($statusResponse['words']) && is_array($statusResponse['words'])) {
                     // Save transcription text and timestamps as JSON
                     $transcription->text = json_encode([
@@ -155,7 +157,52 @@ class VideoTranscriptionController extends Controller
                 }
             }
 
+            // Save the transcription
             $transcription->save();
+
+            // Generate a title for the transcription
+            $titlePrompt = "Create a short title for the following video transcription:";
+            $transcriptionText = implode(' ', array_column($statusResponse['words'], 'text'));
+
+            // Send the title prompt to ChatGPT
+            $finalTitlePrompt = $titlePrompt . " " . $transcriptionText;
+
+            try {
+                // Get the title response from ChatGPT
+                $gptTitleResponse = $this->getGPTResponse($finalTitlePrompt);
+
+                // Assuming the response is a single string
+                $transcription->title = $gptTitleResponse;
+                $transcription->save(); // Save the title in the database
+
+                // Send the first prompt to extract key points from ChatGPT
+                $keypointsPrompt = "Extract 5 key points with timestamps from the following video transcription. 
+            The first key point is 'intro' and the last is 'conclusion'. LIMIT THE RESPONSE to be one word!!!";
+
+                // Append the transcription text to the prompt
+                $finalKeypointsPrompt = $keypointsPrompt . " " . $transcriptionText;
+
+                // Send the prompt to ChatGPT to get key points
+                $gptKeypointsResponse = $this->getGPTResponse($finalKeypointsPrompt);
+
+                // Save the GPT key points response in the 'keypoints' column
+                $transcription->keypoints = json_encode($gptKeypointsResponse);
+                $transcription->save();
+
+                // Send the second prompt to summarize the transcription
+                $summaryPrompt = "Summarize the following video transcription in a maximum of 100 words:";
+                $finalSummaryPrompt = $summaryPrompt . " " . $transcriptionText;
+
+                // Send the second prompt to ChatGPT for summarization
+                $gptSummaryResponse = $this->getGPTResponse($finalSummaryPrompt);
+
+                // Save the GPT summary response in the 'summary' column
+                $transcription->summary = json_encode($gptSummaryResponse);
+                $transcription->save();
+            } catch (\Exception $e) {
+                // Handle the exception if ChatGPT API fails
+                return response()->json(['error' => 'Failed to process transcription: ' . $e->getMessage()], 500);
+            }
         }
     }
 
@@ -221,7 +268,6 @@ class VideoTranscriptionController extends Controller
             return $this->getTranscriptionText($transcription);
         });
 
-        dd($transcriptionTexts->implode(' '));
         $combinedPrompt = "Transcription text: " . $transcriptionTexts->implode(' ') . "\nUser prompt: {$prompt}";
 
 
@@ -341,7 +387,7 @@ class VideoTranscriptionController extends Controller
         } catch (\Exception $e) {
             return redirect()->back()->withErrors(['error' => 'Failed to get response from ChatGPT: ' . $e->getMessage()]);
         }
-        dd(response()->json(['summary' => $response]));
+
         return redirect()->route('transcribe')->with('response', $response);
     }
 }

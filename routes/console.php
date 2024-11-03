@@ -9,5 +9,5 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote')->hourly();
 
 Schedule::call(function () {
-    Artisan::call('check-transcription-status');
-})->everyMinute();
+    Artisan::call('app:check-transcription-status');
+})->everyFiveSeconds();
