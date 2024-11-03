@@ -80,6 +80,25 @@
 
         <hr class="my-4">
 
+        <!-- Summarize Selected Transcriptions Form -->
+        <form action="{{ route('summarize.transcription') }}" method="POST">
+            @csrf
+            <div class="mb-4">
+                <label for="summarize_transcriptions" class="form-label">Select Transcriptions for
+                    Summarization:</label>
+                <select name="transcription_ids[]" id="summarize_transcriptions" class="form-select" required>
+                    @foreach ($transcriptions as $transcription)
+                        <option value="{{ $transcription->transcription_id }}">{{ $transcription->video_url }}</option>
+                    @endforeach
+                </select>
+            </div>
+
+            <button type="submit" class="btn btn-primary">Summarize Selected Transcriptions</button>
+        </form>
+
+
+        <hr class="my-4">
+
         <!-- Results Section -->
         @if (session('results') && count(session('results')) > 0)
             <h2 class="text-xl font-semibold">Search Results:</h2>

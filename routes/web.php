@@ -13,6 +13,7 @@ Route::post('/transcribe', [VideoTranscriptionController::class, 'transcribe']);
 Route::post('/transcribe/search', [VideoTranscriptionController::class, 'searchTimestamps'])->name('search.timestamps');
 Route::get('/transcriptions/check-status', [VideoTranscriptionController::class, 'checkTranscriptionStatus']);
 Route::post('/transcriptions/{transcriptionId}/parse', [VideoTranscriptionController::class, 'parseTranscription']);
+Route::post('/summarize-transcription', [VideoTranscriptionController::class, 'summarizeTranscription'])->name('summarize.transcription');
 
 
 // New route for ChatGPT prompt

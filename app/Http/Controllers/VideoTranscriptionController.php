@@ -6,7 +6,6 @@ use App\Models\Transcription; // Ensure you have the Transcription model
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class VideoTranscriptionController extends Controller
@@ -217,13 +216,14 @@ class VideoTranscriptionController extends Controller
         if ($transcriptions->isEmpty()) {
             return redirect()->back()->withErrors(['error' => 'No selected transcriptions found.']);
         }
-
-        // Combine the prompt and transcription texts for ChatGPT
-        $combinedText = $transcriptions->map(function ($transcription) {
+        // Process each transcription text through getTranscriptionText()
+        $transcriptionTexts = $transcriptions->map(function ($transcription) {
             return $this->getTranscriptionText($transcription);
-        })->implode(' ');
+        });
 
-        $combinedPrompt = "Transcription text: $combinedText\n User prompt: {$prompt}";
+        dd($transcriptionTexts->implode(' '));
+        $combinedPrompt = "Transcription text: " . $transcriptionTexts->implode(' ') . "\nUser prompt: {$prompt}";
+
 
         // Send the combined prompt to ChatGPT (using the OpenAI API)
         try {
@@ -236,12 +236,46 @@ class VideoTranscriptionController extends Controller
         return redirect()->route('transcribe')->with('response', $response);
     }
 
-
-    protected function getTranscriptionText($transcription)
+    protected function getTranscriptionText($transcriptionJson)
     {
-        // Decode the JSON text field that contains the transcription
-        $transcriptionData = json_decode($transcription->text, true);
-        return isset($transcriptionData['transcription']) ? implode(' ', array_map(fn($wordData) => $wordData['text'], $transcriptionData['transcription'])) : '';
+        $transcriptionData = json_decode($transcriptionJson->text, true);
+
+        if (isset($transcriptionData['transcription'])) {
+            $words = $transcriptionData['transcription'];
+            $transcriptionText = '';
+
+            foreach ($words as $wordData) {
+                $startMilliseconds = $wordData['start'];
+                // Convert milliseconds to hours, minutes, and seconds
+                $totalSeconds = $startMilliseconds / 1000;
+                $hours = floor($totalSeconds / 3600);
+                $minutes = floor(($totalSeconds % 3600) / 60);
+                $seconds = $totalSeconds % 60; // Keep fractional part
+
+                // Build time string with only relevant larger units
+                $timeStringParts = [];
+                if ($hours > 0) {
+                    $timeStringParts[] = $hours . ' hour' . ($hours != 1 ? 's' : '');
+                }
+                if ($minutes > 0) {
+                    $timeStringParts[] = $minutes . ' minute' . ($minutes != 1 ? 's' : '');
+                }
+                if ($seconds > 0 || empty($timeStringParts)) {
+                    // Format seconds to remove trailing zeros
+                    $secondsFormatted = rtrim(rtrim(number_format($seconds, 2, '.', ''), '0'), '.');
+                    $timeStringParts[] = $secondsFormatted . ' second' . ($secondsFormatted != '1' ? 's' : '');
+                }
+
+                $timeString = implode(' ', $timeStringParts);
+
+                // Append to transcription text with word content
+                $transcriptionText .= "[$timeString] {$wordData['text']} ";
+            }
+
+            return $transcriptionText;
+        }
+
+        return '';
     }
 
     protected function getGPTResponse($prompt)
@@ -256,7 +290,9 @@ class VideoTranscriptionController extends Controller
             'messages' => [
                 [
                     'role' => 'system',
-                    'content' => "You are a specialized chatbot character designed to interact based solely on a specific transcription provided to you. Your responses should only reference and utilize the content of this transcription. You are not permitted to incorporate external knowledge, personal opinions, or additional context beyond what is contained in the transcription. Please wait for the user to present the transcription before engaging in any conversation. If asked return in minutes"
+                    'content' => "You are a specialized chatbot designed to interact solely based on a specific transcription provided to you. Your responses should exclusively reference and utilize the content of this transcription. Avoid incorporating external knowledge, personal opinions, or any additional context beyond what is contained in the transcription.
+
+                    When you encounter timestamps in milliseconds, display only the start time and convert the milliseconds into seconds (format: 'X.XX seconds'). Do not include end times or any milliseconds in your response"
                 ],
                 [
                     'role' => 'user',
@@ -274,5 +310,38 @@ class VideoTranscriptionController extends Controller
         }
 
         return $response->json()['choices'][0]['message']['content'];
+    }
+    public function summarizeTranscription(Request $request)
+    {
+        $request->validate([
+            'transcription_ids' => 'array|required',
+            'transcription_ids.*' => 'exists:transcriptions,transcription_id',
+        ]);
+
+        $transcriptionIds = $request->input('transcription_ids');
+
+        if (in_array('all', $transcriptionIds)) {
+            $transcriptions = Transcription::where('status', 'completed')->get();
+        } else {
+            $transcriptions = Transcription::whereIn('transcription_id', $transcriptionIds)->get();
+        }
+
+        if ($transcriptions->isEmpty()) {
+            return redirect()->back()->withErrors(['error' => 'No selected transcriptions found.']);
+        }
+
+        $transcriptionTexts = $transcriptions->map(function ($transcription) {
+            return $this->getTranscriptionText($transcription);
+        });
+
+        $summaryPrompt = "Please summarize the following text:" . $transcriptionTexts->implode(' ');
+
+        try {
+            $response = $this->getGPTResponse($summaryPrompt);
+        } catch (\Exception $e) {
+            return redirect()->back()->withErrors(['error' => 'Failed to get response from ChatGPT: ' . $e->getMessage()]);
+        }
+        dd(response()->json(['summary' => $response]));
+        return redirect()->route('transcribe')->with('response', $response);
     }
 }
